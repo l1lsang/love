@@ -153,6 +153,11 @@ textarea {
   resize: vertical;
 }
 
+input[type='file'] {
+  min-height: 48px;
+  padding: 9px 12px;
+}
+
 input::placeholder,
 textarea::placeholder {
   color: rgba(98, 81, 87, 0.58);
@@ -240,6 +245,53 @@ textarea:focus-visible {
 
 .form-message.error {
   border-left-color: var(--accent-strong);
+}
+
+.photo-upload-field {
+  display: grid;
+  gap: 12px;
+}
+
+.photo-preview {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 248, 0.68);
+  padding: 12px;
+}
+
+.photo-preview img {
+  width: 112px;
+  height: 112px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.photo-preview div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.photo-preview strong,
+.photo-preview small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-preview strong {
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.photo-preview small {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 .auth-divider {
@@ -645,8 +697,15 @@ textarea:focus-visible {
   .field-grid,
   .mailbox-top,
   .letter-list,
-  .letter-facts {
+  .letter-facts,
+  .photo-preview {
     grid-template-columns: 1fr;
+  }
+
+  .photo-preview img {
+    width: 100%;
+    height: auto;
+    max-height: 220px;
   }
 
   .stats-panel div + div {

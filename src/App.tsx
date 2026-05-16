@@ -28,7 +28,8 @@ import {
   type Timestamp,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
-import { auth, db, functions } from './firebase'
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
+import { auth, db, functions, storage } from './firebase'
 import './App.css'
 
 type AuthMode = 'signIn' | 'signUp'
@@ -47,7 +48,6 @@ type ComposeForm = {
   message: string
   sharedDate: string
   memoryPlace: string
-  photoUrl: string
 }
 
 type LetterData = {
@@ -61,6 +61,7 @@ type LetterData = {
   sharedDate?: string
   memoryPlace?: string
   photoUrl?: string
+  photoPath?: string
   createdAt?: Timestamp | null
   readAt?: Timestamp | null
 }
@@ -77,6 +78,7 @@ type Letter = {
   sharedDate: string
   memoryPlace: string
   photoUrl: string
+  photoPath: string
   createdAt: Timestamp | null
   readAt: Timestamp | null
 }
@@ -108,7 +110,6 @@ const emptyComposeForm: ComposeForm = {
     '오늘 문득 네 생각이 났어.\n별일 아닌 하루도 너에게 닿으면 조금 더 다정해지는 것 같아.',
   sharedDate: '',
   memoryPlace: '',
-  photoUrl: '',
 }
 
 const lettersRef = collection(db, 'letters')
@@ -121,6 +122,7 @@ const createKakaoAuthUrl = httpsCallable<
   KakaoAuthUrlResult
 >(functions, 'createKakaoAuthUrl')
 const KAKAO_STATE_KEY = 'love-kakao-oauth-state'
+const MAX_PHOTO_SIZE = 8 * 1024 * 1024
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
@@ -161,6 +163,7 @@ function toLetter(snapshot: QueryDocumentSnapshot): Letter {
     sharedDate: data.sharedDate ?? '',
     memoryPlace: data.memoryPlace ?? '',
     photoUrl: data.photoUrl ?? '',
+    photoPath: data.photoPath ?? '',
     createdAt: data.createdAt ?? null,
     readAt: data.readAt ?? null,
   }
@@ -200,6 +203,10 @@ function friendlyError(error: unknown) {
       return '비밀번호는 6자 이상으로 정해 주세요.'
     case 'permission-denied':
       return 'Firebase 권한 설정이 막혀 있어요. Firestore 규칙을 확인해 주세요.'
+    case 'storage/unauthorized':
+      return '사진 업로드 권한이 막혀 있어요. Storage 규칙을 확인해 주세요.'
+    case 'storage/quota-exceeded':
+      return 'Storage 사용량이 가득 찼어요. Firebase 저장공간을 확인해 주세요.'
     case 'functions/failed-precondition':
       return '카카오 서버 설정을 확인해 주세요.'
     case 'functions/unauthenticated':
@@ -213,6 +220,8 @@ function friendlyError(error: unknown) {
 
 function App() {
   const hasHandledKakaoRedirect = useRef(false)
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const photoPreviewRef = useRef('')
   const [authReady, setAuthReady] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode>('signIn')
@@ -220,7 +229,10 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [kakaoLoading, setKakaoLoading] = useState(false)
+  const [sendLoading, setSendLoading] = useState(false)
   const [compose, setCompose] = useState<ComposeForm>(emptyComposeForm)
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState('')
   const [receivedLetters, setReceivedLetters] = useState<Letter[]>([])
   const [sentLetters, setSentLetters] = useState<Letter[]>([])
   const [mailboxTab, setMailboxTab] = useState<MailboxTab>('received')
@@ -234,6 +246,14 @@ function App() {
       setUser(currentUser)
       setAuthReady(true)
     })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (photoPreviewRef.current) {
+        URL.revokeObjectURL(photoPreviewRef.current)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -372,6 +392,66 @@ function App() {
       setSendStatus('')
     }
 
+  const handlePhotoChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+
+    if (!file) {
+      return
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setSendStatus('이미지 파일만 업로드할 수 있어요.')
+      event.target.value = ''
+      return
+    }
+
+    if (file.size > MAX_PHOTO_SIZE) {
+      setSendStatus('사진은 8MB 이하로 올려 주세요.')
+      event.target.value = ''
+      return
+    }
+
+    if (photoPreviewRef.current) {
+      URL.revokeObjectURL(photoPreviewRef.current)
+    }
+
+    const previewUrl = URL.createObjectURL(file)
+    photoPreviewRef.current = previewUrl
+    setPhotoPreviewUrl(previewUrl)
+    setPhotoFile(file)
+    setSendStatus('')
+  }
+
+  const clearPhoto = () => {
+    if (photoPreviewRef.current) {
+      URL.revokeObjectURL(photoPreviewRef.current)
+      photoPreviewRef.current = ''
+    }
+
+    setPhotoFile(null)
+    setPhotoPreviewUrl('')
+
+    if (photoInputRef.current) {
+      photoInputRef.current.value = ''
+    }
+  }
+
+  const uploadLetterPhoto = async (file: File, currentUser: User) => {
+    const extension = file.name.split('.').pop()?.replace(/[^a-zA-Z0-9]/g, '')
+    const fileName = `${crypto.randomUUID()}${extension ? `.${extension}` : ''}`
+    const photoPath = `letter-photos/${currentUser.uid}/${fileName}`
+    const photoRef = storageRef(storage, photoPath)
+    const snapshot = await uploadBytes(photoRef, file, {
+      contentType: file.type,
+      customMetadata: {
+        senderUid: currentUser.uid,
+      },
+    })
+    const photoUrl = await getDownloadURL(snapshot.ref)
+
+    return { photoUrl, photoPath }
+  }
+
   const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setAuthError('')
@@ -443,7 +523,13 @@ function App() {
       return
     }
 
+    setSendLoading(true)
+
     try {
+      const uploadedPhoto = photoFile
+        ? await uploadLetterPhoto(photoFile, user)
+        : { photoUrl: '', photoPath: '' }
+
       await addDoc(lettersRef, {
         title,
         message,
@@ -454,7 +540,8 @@ function App() {
         senderName: displayNameFor(user),
         sharedDate: compose.sharedDate.trim(),
         memoryPlace: compose.memoryPlace.trim(),
-        photoUrl: compose.photoUrl.trim(),
+        photoUrl: uploadedPhoto.photoUrl,
+        photoPath: uploadedPhoto.photoPath,
         createdAt: serverTimestamp(),
         readAt: null,
       })
@@ -464,10 +551,13 @@ function App() {
         recipientEmail: currentForm.recipientEmail,
         recipientName: currentForm.recipientName,
       }))
+      clearPhoto()
       setMailboxTab('sent')
       setSendStatus('편지가 저장되고 상대의 받은 편지함으로 보내졌어요.')
     } catch (error) {
       setSendStatus(friendlyError(error))
+    } finally {
+      setSendLoading(false)
     }
   }
 
@@ -718,20 +808,41 @@ function App() {
             />
           </label>
 
-          <label>
-            <span>사진 링크</span>
-            <input
-              value={compose.photoUrl}
-              onChange={updateCompose('photoUrl')}
-              placeholder="https://..."
-              type="url"
-            />
-          </label>
+          <div className="photo-upload-field">
+            <label>
+              <span>사진 업로드</span>
+              <input
+                ref={photoInputRef}
+                onChange={handlePhotoChange}
+                type="file"
+                accept="image/*"
+              />
+            </label>
+
+            {photoFile && (
+              <div className="photo-preview">
+                {photoPreviewUrl && (
+                  <img src={photoPreviewUrl} alt="업로드할 추억 미리보기" />
+                )}
+                <div>
+                  <strong>{photoFile.name}</strong>
+                  <small>{(photoFile.size / 1024 / 1024).toFixed(1)}MB</small>
+                  <button
+                    className="button ghost"
+                    type="button"
+                    onClick={clearPhoto}
+                  >
+                    사진 제거
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {sendStatus && <p className="form-message">{sendStatus}</p>}
 
-          <button className="button primary" type="submit">
-            편지 보내기
+          <button className="button primary" type="submit" disabled={sendLoading}>
+            {sendLoading ? '사진과 편지 저장 중' : '편지 보내기'}
           </button>
         </form>
 

@@ -6,19 +6,20 @@
 
 1. Firebase Console에서 Authentication > Sign-in method로 이동해 Email/Password 로그인을 켭니다.
 2. Firestore Database를 생성합니다.
-3. `firestore.rules` 내용을 Firebase Console의 Firestore Rules에 붙여 넣고 게시합니다.
-4. Kakao Developers에서 앱을 만들고 카카오 로그인을 활성화합니다.
-5. Kakao Developers의 Redirect URI에 로컬/배포 주소를 등록합니다. 예: `http://localhost:5173/`
-6. `.env.example`을 참고해 `.env`에 필요한 Firebase 값과 `VITE_KAKAO_REDIRECT_URI`를 넣습니다. Redirect URI를 생략하면 현재 페이지 주소를 사용합니다.
-7. Firebase Secret Manager에 카카오 서버 키를 저장합니다.
-8. Functions를 배포한 뒤 실행합니다.
+3. 사진 업로드를 위해 Firebase Storage를 생성합니다.
+4. `firestore.rules`와 `storage.rules`를 배포합니다.
+5. Kakao Developers에서 앱을 만들고 카카오 로그인을 활성화합니다.
+6. Kakao Developers의 Redirect URI에 로컬/배포 주소를 등록합니다. 예: `http://localhost:5173/`
+7. `.env.example`을 참고해 `.env`에 필요한 Firebase 값과 `VITE_KAKAO_REDIRECT_URI`를 넣습니다. Redirect URI를 생략하면 현재 페이지 주소를 사용합니다.
+8. Firebase Secret Manager에 카카오 서버 키를 저장합니다.
+9. Functions를 배포한 뒤 실행합니다.
 
 ```bash
 npm install
 npm --prefix functions install
 firebase functions:secrets:set KAKAO_REST_API_KEY --project mydbtest-89a84
 firebase functions:secrets:set KAKAO_CLIENT_SECRET --project mydbtest-89a84
-firebase deploy --only functions,firestore:rules
+firebase deploy --only functions,firestore,storage,hosting
 npm run dev
 ```
 
@@ -27,6 +28,8 @@ Firebase 설정값은 `src/firebase.ts`에 기본값으로 들어 있습니다. 
 카카오 로그인은 Firebase Function `createKakaoAuthUrl`이 Secret Manager의 카카오 REST API 키로 인증 URL을 만들고, 리다이렉트 후 받은 OAuth 인가 코드를 `kakaoLogin`에 보내 Firebase custom token으로 교환하는 방식입니다. 카카오 이메일 동의항목을 쓰지 않고, 카카오 ID로 만든 내부 편지 주소를 Firebase Auth 이메일 필드에 저장해 편지를 라우팅합니다. 사용자는 화면의 `내 편지 주소 복사` 버튼으로 상대에게 보낼 주소를 복사할 수 있습니다.
 
 서버용 카카오 키는 `functions/index.js`에서 `defineSecret()`으로 읽습니다. 배포 전 `firebase functions:secrets:set ...`으로 Secret Manager에 저장해야 하며, 값을 바꾸면 함수를 다시 배포해야 반영됩니다. 로컬 emulator에서만 테스트할 값은 `functions/.secret.local`에 둘 수 있습니다.
+
+편지 사진은 Firebase Storage의 `letter-photos/{uid}/...` 경로에 업로드되고, Firestore 편지 문서에는 다운로드 URL과 Storage 경로가 저장됩니다. `storage.rules`는 로그인한 사용자가 자기 UID 폴더에 8MB 이하 이미지 파일만 올릴 수 있게 제한합니다.
 
 기존에 `functions/.env`로 같은 키를 배포한 적이 있으면 `Secret environment variable overlaps non secret environment variable` 오류가 날 수 있습니다. 이때는 `functions/.env`를 제거하거나 다른 이름으로 옮긴 뒤, 기존 함수를 한 번 삭제하고 다시 배포합니다.
 
