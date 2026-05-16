@@ -1,24 +1,14 @@
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { defineSecret } from 'firebase-functions/params'
 
 initializeApp()
 
 const KAKAO_TOKEN_URL = 'https://kauth.kakao.com/oauth/token'
 const KAKAO_USER_URL = 'https://kapi.kakao.com/v2/user/me'
-
-function requiredEnv(name) {
-  const value = process.env[name]
-
-  if (!value) {
-    throw new HttpsError(
-      'failed-precondition',
-      `${name} is not configured in Firebase Functions.`,
-    )
-  }
-
-  return value
-}
+const kakaoRestApiKey = defineSecret('KAKAO_REST_API_KEY')
+const kakaoClientSecret = defineSecret('KAKAO_CLIENT_SECRET')
 
 async function readError(response) {
   try {
@@ -31,11 +21,11 @@ async function readError(response) {
 async function exchangeCodeForToken({ code, redirectUri }) {
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
-    client_id: requiredEnv('KAKAO_REST_API_KEY'),
+    client_id: kakaoRestApiKey.value(),
     redirect_uri: redirectUri,
     code,
   })
-  const clientSecret = process.env.KAKAO_CLIENT_SECRET
+  const clientSecret = kakaoClientSecret.value()
 
   if (clientSecret) {
     body.set('client_secret', clientSecret)
@@ -121,55 +111,64 @@ async function getFirebaseUid({ kakaoId, email, displayName, photoURL }) {
   return uid
 }
 
-export const kakaoLogin = onCall({ region: 'us-central1' }, async (request) => {
-  const code = String(request.data?.code ?? '').trim()
-  const redirectUri = String(request.data?.redirectUri ?? '').trim()
+export const kakaoLogin = onCall(
+  {
+    region: 'us-central1',
+    secrets: [kakaoRestApiKey, kakaoClientSecret],
+  },
+  async (request) => {
+    const code = String(request.data?.code ?? '').trim()
+    const redirectUri = String(request.data?.redirectUri ?? '').trim()
 
-  if (!code || !redirectUri) {
-    throw new HttpsError('invalid-argument', 'code and redirectUri are required.')
-  }
+    if (!code || !redirectUri) {
+      throw new HttpsError(
+        'invalid-argument',
+        'code and redirectUri are required.',
+      )
+    }
 
-  const token = await exchangeCodeForToken({ code, redirectUri })
-  const kakaoUser = await fetchKakaoProfile(token.access_token)
-  const kakaoId = String(kakaoUser.id ?? '')
-  const kakaoAccount = kakaoUser.kakao_account ?? {}
-  const profile = kakaoAccount.profile ?? {}
-  const email = String(kakaoAccount.email ?? '').trim().toLowerCase()
-  const displayName = String(
-    profile.nickname ?? kakaoUser.properties?.nickname ?? '카카오 사용자',
-  )
-  const photoURL = String(
-    profile.profile_image_url ?? kakaoUser.properties?.profile_image ?? '',
-  )
-
-  if (!kakaoId) {
-    throw new HttpsError('unauthenticated', 'Kakao user id was not returned.')
-  }
-
-  if (!email) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Kakao account email consent is required for this letter mailbox.',
+    const token = await exchangeCodeForToken({ code, redirectUri })
+    const kakaoUser = await fetchKakaoProfile(token.access_token)
+    const kakaoId = String(kakaoUser.id ?? '')
+    const kakaoAccount = kakaoUser.kakao_account ?? {}
+    const profile = kakaoAccount.profile ?? {}
+    const email = String(kakaoAccount.email ?? '').trim().toLowerCase()
+    const displayName = String(
+      profile.nickname ?? kakaoUser.properties?.nickname ?? '카카오 사용자',
     )
-  }
+    const photoURL = String(
+      profile.profile_image_url ?? kakaoUser.properties?.profile_image ?? '',
+    )
 
-  const uid = await getFirebaseUid({
-    kakaoId,
-    email,
-    displayName,
-    photoURL,
-  })
-  const customToken = await getAuth().createCustomToken(uid, {
-    provider: 'kakao',
-    kakaoId,
-  })
+    if (!kakaoId) {
+      throw new HttpsError('unauthenticated', 'Kakao user id was not returned.')
+    }
 
-  return {
-    customToken,
-    profile: {
+    if (!email) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Kakao account email consent is required for this letter mailbox.',
+      )
+    }
+
+    const uid = await getFirebaseUid({
+      kakaoId,
+      email,
       displayName,
       photoURL,
-      email,
-    },
-  }
-})
+    })
+    const customToken = await getAuth().createCustomToken(uid, {
+      provider: 'kakao',
+      kakaoId,
+    })
+
+    return {
+      customToken,
+      profile: {
+        displayName,
+        photoURL,
+        email,
+      },
+    }
+  },
+)

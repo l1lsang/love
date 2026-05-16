@@ -10,6 +10,9 @@ lerna-debug.log*
 .env.*
 !.env.example
 !functions/.env.example
+.secret.local
+.secret.*
+!functions/.secret.local.example
 
 node_modules
 dist
