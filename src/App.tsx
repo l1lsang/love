@@ -90,6 +90,10 @@ type KakaoLoginResult = {
   }
 }
 
+type KakaoAuthUrlResult = {
+  authUrl: string
+}
+
 const emptyAuthForm: AuthForm = {
   name: '',
   email: '',
@@ -112,8 +116,11 @@ const kakaoLogin = httpsCallable<
   { code: string; redirectUri: string },
   KakaoLoginResult
 >(functions, 'kakaoLogin')
+const createKakaoAuthUrl = httpsCallable<
+  { redirectUri: string; state: string },
+  KakaoAuthUrlResult
+>(functions, 'createKakaoAuthUrl')
 const KAKAO_STATE_KEY = 'love-kakao-oauth-state'
-const KAKAO_SCOPE = 'account_email,profile_nickname,profile_image'
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
@@ -391,26 +398,25 @@ function App() {
     }
   }
 
-  const startKakaoLogin = () => {
-    const kakaoRestApiKey = import.meta.env.VITE_KAKAO_REST_API_KEY
-
-    if (!kakaoRestApiKey) {
-      setAuthError('VITE_KAKAO_REST_API_KEY를 .env에 설정해 주세요.')
-      return
-    }
-
+  const startKakaoLogin = async () => {
     const state = crypto.randomUUID()
     const redirectUri = getKakaoRedirectUri()
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: kakaoRestApiKey,
-      redirect_uri: redirectUri,
-      state,
-      scope: KAKAO_SCOPE,
-    })
 
-    window.localStorage.setItem(KAKAO_STATE_KEY, state)
-    window.location.assign(`https://kauth.kakao.com/oauth/authorize?${params}`)
+    setAuthError('')
+    setKakaoLoading(true)
+
+    try {
+      const result = await createKakaoAuthUrl({
+        redirectUri,
+        state,
+      })
+
+      window.localStorage.setItem(KAKAO_STATE_KEY, state)
+      window.location.assign(result.data.authUrl)
+    } catch (error) {
+      setAuthError(friendlyError(error))
+      setKakaoLoading(false)
+    }
   }
 
   const handleSendLetter = async (event: FormEvent<HTMLFormElement>) => {

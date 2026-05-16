@@ -9,7 +9,7 @@
 3. `firestore.rules` 내용을 Firebase Console의 Firestore Rules에 붙여 넣고 게시합니다.
 4. Kakao Developers에서 앱을 만들고 카카오 로그인을 활성화합니다.
 5. Kakao Developers의 Redirect URI에 로컬/배포 주소를 등록합니다. 예: `http://localhost:5173/`
-6. `.env.example`을 참고해 `.env`에 `VITE_KAKAO_REST_API_KEY`와 `VITE_KAKAO_REDIRECT_URI`를 넣습니다.
+6. `.env.example`을 참고해 `.env`에 필요한 Firebase 값과 `VITE_KAKAO_REDIRECT_URI`를 넣습니다. Redirect URI를 생략하면 현재 페이지 주소를 사용합니다.
 7. Firebase Secret Manager에 카카오 서버 키를 저장합니다.
 8. Functions를 배포한 뒤 실행합니다.
 
@@ -24,7 +24,7 @@ npm run dev
 
 Firebase 설정값은 `src/firebase.ts`에 기본값으로 들어 있습니다. 배포용으로 분리하려면 `.env`에 `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`를 넣으면 됩니다.
 
-카카오 로그인은 OAuth 인가 코드를 Firebase Function `kakaoLogin`에 보내고, Function이 카카오 REST API로 토큰과 사용자 정보를 확인한 뒤 Firebase custom token을 발급하는 방식입니다. 이 편지함은 이메일로 편지를 라우팅하므로 Kakao Developers 동의항목에서 `account_email`을 받을 수 있게 설정해야 합니다.
+카카오 로그인은 Firebase Function `createKakaoAuthUrl`이 Secret Manager의 카카오 REST API 키로 인증 URL을 만들고, 리다이렉트 후 받은 OAuth 인가 코드를 `kakaoLogin`에 보내 Firebase custom token으로 교환하는 방식입니다. 이 편지함은 이메일로 편지를 라우팅하므로 Kakao Developers 동의항목에서 `account_email`을 받을 수 있게 설정해야 합니다.
 
 서버용 카카오 키는 `functions/index.js`에서 `defineSecret()`으로 읽습니다. 배포 전 `firebase functions:secrets:set ...`으로 Secret Manager에 저장해야 하며, 값을 바꾸면 함수를 다시 배포해야 반영됩니다. 로컬 emulator에서만 테스트할 값은 `functions/.secret.local`에 둘 수 있습니다.
 

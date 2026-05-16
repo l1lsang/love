@@ -7,6 +7,8 @@ initializeApp()
 
 const KAKAO_TOKEN_URL = 'https://kauth.kakao.com/oauth/token'
 const KAKAO_USER_URL = 'https://kapi.kakao.com/v2/user/me'
+const KAKAO_AUTHORIZE_URL = 'https://kauth.kakao.com/oauth/authorize'
+const KAKAO_SCOPE = 'account_email,profile_nickname,profile_image'
 const kakaoRestApiKey = defineSecret('KAKAO_REST_API_KEY')
 const kakaoClientSecret = defineSecret('KAKAO_CLIENT_SECRET')
 
@@ -110,6 +112,36 @@ async function getFirebaseUid({ kakaoId, email, displayName, photoURL }) {
 
   return uid
 }
+
+export const createKakaoAuthUrl = onCall(
+  {
+    region: 'us-central1',
+    secrets: [kakaoRestApiKey],
+  },
+  async (request) => {
+    const redirectUri = String(request.data?.redirectUri ?? '').trim()
+    const state = String(request.data?.state ?? '').trim()
+
+    if (!redirectUri || !state) {
+      throw new HttpsError(
+        'invalid-argument',
+        'redirectUri and state are required.',
+      )
+    }
+
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: kakaoRestApiKey.value(),
+      redirect_uri: redirectUri,
+      state,
+      scope: KAKAO_SCOPE,
+    })
+
+    return {
+      authUrl: `${KAKAO_AUTHORIZE_URL}?${params}`,
+    }
+  },
+)
 
 export const kakaoLogin = onCall(
   {

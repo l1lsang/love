@@ -13,6 +13,7 @@ lerna-debug.log*
 .secret.local
 .secret.*
 !functions/.secret.local.example
+.firebase/
 
 node_modules
 dist
