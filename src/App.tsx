@@ -142,6 +142,10 @@ function displayNameFor(user: User) {
   return user.displayName || user.email?.split('@')[0] || '나'
 }
 
+function mailboxAddressFor(user: User) {
+  return normalizeEmail(user.email ?? '')
+}
+
 function toLetter(snapshot: QueryDocumentSnapshot): Letter {
   const data = snapshot.data() as LetterData
 
@@ -197,7 +201,7 @@ function friendlyError(error: unknown) {
     case 'permission-denied':
       return 'Firebase 권한 설정이 막혀 있어요. Firestore 규칙을 확인해 주세요.'
     case 'functions/failed-precondition':
-      return '카카오 이메일 동의나 서버 환경 설정을 확인해 주세요.'
+      return '카카오 서버 설정을 확인해 주세요.'
     case 'functions/unauthenticated':
       return '카카오 로그인 인증이 만료되었어요. 다시 시도해 주세요.'
     default:
@@ -281,6 +285,8 @@ function App() {
           auth,
           result.data.customToken,
         )
+        await credential.user.reload()
+
         const { displayName, photoURL } = result.data.profile ?? {}
 
         if (displayName || photoURL) {
@@ -307,7 +313,7 @@ function App() {
       return
     }
 
-    const userEmail = normalizeEmail(user.email)
+    const userEmail = mailboxAddressFor(user)
     const receivedQuery = query(
       lettersRef,
       where('recipientEmail', '==', userEmail),
@@ -433,7 +439,7 @@ function App() {
     const message = compose.message.trim()
 
     if (!recipientEmail || !title || !message) {
-      setSendStatus('받는 이메일, 제목, 내용을 채워 주세요.')
+      setSendStatus('받는 편지 주소, 제목, 내용을 채워 주세요.')
       return
     }
 
@@ -444,7 +450,7 @@ function App() {
         recipientEmail,
         recipientName: compose.recipientName.trim(),
         senderUid: user.uid,
-        senderEmail: normalizeEmail(user.email),
+        senderEmail: mailboxAddressFor(user),
         senderName: displayNameFor(user),
         sharedDate: compose.sharedDate.trim(),
         memoryPlace: compose.memoryPlace.trim(),
@@ -481,13 +487,13 @@ function App() {
     }
   }
 
-  const copyMyEmail = async () => {
+  const copyMyAddress = async () => {
     if (!user?.email) {
       return
     }
 
     try {
-      await navigator.clipboard.writeText(normalizeEmail(user.email))
+      await navigator.clipboard.writeText(mailboxAddressFor(user))
       setCopyStatus('복사됐어요')
       window.setTimeout(() => setCopyStatus(''), 1800)
     } catch {
@@ -611,10 +617,10 @@ function App() {
         <div className="user-menu">
           <div>
             <strong>{displayNameFor(user)}</strong>
-            <span>{normalizeEmail(user.email ?? '')}</span>
+            <span>{mailboxAddressFor(user)}</span>
           </div>
-          <button className="button ghost" type="button" onClick={copyMyEmail}>
-            {copyStatus || '내 이메일 복사'}
+          <button className="button ghost" type="button" onClick={copyMyAddress}>
+            {copyStatus || '내 편지 주소 복사'}
           </button>
           <button className="button ghost" type="button" onClick={() => signOut(auth)}>
             로그아웃
@@ -656,11 +662,11 @@ function App() {
 
           <div className="field-grid">
             <label>
-              <span>받는 사람 이메일</span>
+              <span>받는 사람 편지 주소</span>
               <input
                 value={compose.recipientEmail}
                 onChange={updateCompose('recipientEmail')}
-                placeholder="lover@example.com"
+                placeholder="상대가 복사해 준 편지 주소"
                 type="email"
                 required
               />

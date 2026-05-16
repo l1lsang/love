@@ -8,7 +8,7 @@ initializeApp()
 const KAKAO_TOKEN_URL = 'https://kauth.kakao.com/oauth/token'
 const KAKAO_USER_URL = 'https://kapi.kakao.com/v2/user/me'
 const KAKAO_AUTHORIZE_URL = 'https://kauth.kakao.com/oauth/authorize'
-const KAKAO_SCOPE = 'account_email,profile_nickname,profile_image'
+const KAKAO_SCOPE = ''
 const kakaoRestApiKey = defineSecret('KAKAO_REST_API_KEY')
 const kakaoClientSecret = defineSecret('KAKAO_CLIENT_SECRET')
 
@@ -70,11 +70,22 @@ async function fetchKakaoProfile(accessToken) {
   return response.json()
 }
 
-async function getFirebaseUid({ kakaoId, email, displayName, photoURL }) {
+function makeKakaoLetterAddress(kakaoId) {
+  const safeId = String(kakaoId).replace(/[^a-zA-Z0-9._-]/g, '')
+  return `kakao-${safeId}@letters.example.com`
+}
+
+async function getFirebaseUid({
+  kakaoId,
+  letterAddress,
+  displayName,
+  photoURL,
+}) {
   const auth = getAuth()
   const kakaoUid = `kakao_${kakaoId}`
   let uid = kakaoUid
   const profileUpdate = {
+    email: letterAddress,
     emailVerified: true,
   }
 
@@ -87,7 +98,7 @@ async function getFirebaseUid({ kakaoId, email, displayName, photoURL }) {
   }
 
   try {
-    const existingUser = await auth.getUserByEmail(email)
+    const existingUser = await auth.getUserByEmail(letterAddress)
     uid = existingUser.uid
   } catch (error) {
     if (error?.code !== 'auth/user-not-found') {
@@ -105,7 +116,6 @@ async function getFirebaseUid({ kakaoId, email, displayName, photoURL }) {
 
     await auth.createUser({
       uid,
-      email,
       ...profileUpdate,
     })
   }
@@ -134,8 +144,11 @@ export const createKakaoAuthUrl = onCall(
       client_id: kakaoRestApiKey.value(),
       redirect_uri: redirectUri,
       state,
-      scope: KAKAO_SCOPE,
     })
+
+    if (KAKAO_SCOPE) {
+      params.set('scope', KAKAO_SCOPE)
+    }
 
     return {
       authUrl: `${KAKAO_AUTHORIZE_URL}?${params}`,
@@ -164,7 +177,7 @@ export const kakaoLogin = onCall(
     const kakaoId = String(kakaoUser.id ?? '')
     const kakaoAccount = kakaoUser.kakao_account ?? {}
     const profile = kakaoAccount.profile ?? {}
-    const email = String(kakaoAccount.email ?? '').trim().toLowerCase()
+    const letterAddress = makeKakaoLetterAddress(kakaoId)
     const displayName = String(
       profile.nickname ?? kakaoUser.properties?.nickname ?? '카카오 사용자',
     )
@@ -176,22 +189,22 @@ export const kakaoLogin = onCall(
       throw new HttpsError('unauthenticated', 'Kakao user id was not returned.')
     }
 
-    if (!email) {
-      throw new HttpsError(
-        'failed-precondition',
-        'Kakao account email consent is required for this letter mailbox.',
-      )
-    }
-
     const uid = await getFirebaseUid({
       kakaoId,
-      email,
+      letterAddress,
       displayName,
       photoURL,
     })
+    await getAuth().setCustomUserClaims(uid, {
+      provider: 'kakao',
+      kakaoId,
+      letterAddress,
+    })
+
     const customToken = await getAuth().createCustomToken(uid, {
       provider: 'kakao',
       kakaoId,
+      letterAddress,
     })
 
     return {
@@ -199,7 +212,7 @@ export const kakaoLogin = onCall(
       profile: {
         displayName,
         photoURL,
-        email,
+        email: letterAddress,
       },
     }
   },

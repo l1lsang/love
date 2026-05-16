@@ -2,10 +2,16 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function ownsMailbox(address) {
+      return request.auth.token.email == address
+        || request.auth.token.letterAddress == address;
+    }
+
     match /letters/{letterId} {
       allow create: if request.auth != null
         && request.resource.data.senderUid == request.auth.uid
-        && request.resource.data.senderEmail == request.auth.token.email
+        && request.resource.data.senderEmail is string
+        && ownsMailbox(request.resource.data.senderEmail)
         && request.resource.data.recipientEmail is string
         && request.resource.data.title is string
         && request.resource.data.message is string;
@@ -13,11 +19,11 @@ service cloud.firestore {
       allow read: if request.auth != null
         && (
           resource.data.senderUid == request.auth.uid
-          || resource.data.recipientEmail == request.auth.token.email
+          || ownsMailbox(resource.data.recipientEmail)
         );
 
       allow update: if request.auth != null
-        && resource.data.recipientEmail == request.auth.token.email
+        && ownsMailbox(resource.data.recipientEmail)
         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['readAt']);
 
       allow delete: if false;
