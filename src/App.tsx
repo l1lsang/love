@@ -3,12 +3,14 @@ import {
   type FormEvent,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithCustomToken,
   signOut,
   updateProfile,
   type User,
@@ -25,7 +27,8 @@ import {
   type QueryDocumentSnapshot,
   type Timestamp,
 } from 'firebase/firestore'
-import { auth, db } from './firebase'
+import { httpsCallable } from 'firebase/functions'
+import { auth, db, functions } from './firebase'
 import './App.css'
 
 type AuthMode = 'signIn' | 'signUp'
@@ -78,6 +81,15 @@ type Letter = {
   readAt: Timestamp | null
 }
 
+type KakaoLoginResult = {
+  customToken: string
+  profile?: {
+    displayName?: string
+    photoURL?: string
+    email?: string
+  }
+}
+
 const emptyAuthForm: AuthForm = {
   name: '',
   email: '',
@@ -96,9 +108,27 @@ const emptyComposeForm: ComposeForm = {
 }
 
 const lettersRef = collection(db, 'letters')
+const kakaoLogin = httpsCallable<
+  { code: string; redirectUri: string },
+  KakaoLoginResult
+>(functions, 'kakaoLogin')
+const KAKAO_STATE_KEY = 'love-kakao-oauth-state'
+const KAKAO_SCOPE = 'account_email,profile_nickname,profile_image'
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
+}
+
+function getKakaoRedirectUri() {
+  return (
+    import.meta.env.VITE_KAKAO_REDIRECT_URI ??
+    `${window.location.origin}${window.location.pathname}`
+  )
+}
+
+function cleanKakaoQuery() {
+  const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.hash}`
+  window.history.replaceState({}, document.title, cleanUrl)
 }
 
 function displayNameFor(user: User) {
@@ -159,6 +189,10 @@ function friendlyError(error: unknown) {
       return '비밀번호는 6자 이상으로 정해 주세요.'
     case 'permission-denied':
       return 'Firebase 권한 설정이 막혀 있어요. Firestore 규칙을 확인해 주세요.'
+    case 'functions/failed-precondition':
+      return '카카오 이메일 동의나 서버 환경 설정을 확인해 주세요.'
+    case 'functions/unauthenticated':
+      return '카카오 로그인 인증이 만료되었어요. 다시 시도해 주세요.'
     default:
       return error instanceof Error
         ? error.message.replace('Firebase: ', '')
@@ -167,12 +201,14 @@ function friendlyError(error: unknown) {
 }
 
 function App() {
+  const hasHandledKakaoRedirect = useRef(false)
   const [authReady, setAuthReady] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode>('signIn')
   const [authForm, setAuthForm] = useState<AuthForm>(emptyAuthForm)
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
+  const [kakaoLoading, setKakaoLoading] = useState(false)
   const [compose, setCompose] = useState<ComposeForm>(emptyComposeForm)
   const [receivedLetters, setReceivedLetters] = useState<Letter[]>([])
   const [sentLetters, setSentLetters] = useState<Letter[]>([])
@@ -188,6 +224,76 @@ function App() {
       setAuthReady(true)
     })
   }, [])
+
+  useEffect(() => {
+    if (!authReady || hasHandledKakaoRedirect.current) {
+      return
+    }
+
+    const searchParams = new URLSearchParams(window.location.search)
+    const code = searchParams.get('code')
+    const state = searchParams.get('state')
+    const kakaoError =
+      searchParams.get('error_description') ?? searchParams.get('error')
+
+    if (!code && !kakaoError) {
+      return
+    }
+
+    hasHandledKakaoRedirect.current = true
+
+    const finishKakaoRedirectWithError = (message: string) => {
+      window.queueMicrotask(() => setAuthError(message))
+      cleanKakaoQuery()
+    }
+
+    if (kakaoError) {
+      finishKakaoRedirectWithError(`카카오 로그인이 취소되었어요. ${kakaoError}`)
+      return
+    }
+
+    const savedState = window.localStorage.getItem(KAKAO_STATE_KEY)
+
+    if (!state || state !== savedState) {
+      finishKakaoRedirectWithError(
+        '카카오 로그인 요청을 확인할 수 없어요. 다시 시도해 주세요.',
+      )
+      return
+    }
+
+    const exchangeKakaoCode = async () => {
+      setAuthError('')
+      setKakaoLoading(true)
+
+      try {
+        const result = await kakaoLogin({
+          code: code ?? '',
+          redirectUri: getKakaoRedirectUri(),
+        })
+        const credential = await signInWithCustomToken(
+          auth,
+          result.data.customToken,
+        )
+        const { displayName, photoURL } = result.data.profile ?? {}
+
+        if (displayName || photoURL) {
+          await updateProfile(credential.user, {
+            displayName: displayName || credential.user.displayName,
+            photoURL: photoURL || credential.user.photoURL,
+          })
+        }
+
+        window.localStorage.removeItem(KAKAO_STATE_KEY)
+      } catch (error) {
+        setAuthError(friendlyError(error))
+      } finally {
+        setKakaoLoading(false)
+        cleanKakaoQuery()
+      }
+    }
+
+    void exchangeKakaoCode()
+  }, [authReady])
 
   useEffect(() => {
     if (!user?.email) {
@@ -283,6 +389,28 @@ function App() {
     } finally {
       setAuthLoading(false)
     }
+  }
+
+  const startKakaoLogin = () => {
+    const kakaoRestApiKey = import.meta.env.VITE_KAKAO_REST_API_KEY
+
+    if (!kakaoRestApiKey) {
+      setAuthError('VITE_KAKAO_REST_API_KEY를 .env에 설정해 주세요.')
+      return
+    }
+
+    const state = crypto.randomUUID()
+    const redirectUri = getKakaoRedirectUri()
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: kakaoRestApiKey,
+      redirect_uri: redirectUri,
+      state,
+      scope: KAKAO_SCOPE,
+    })
+
+    window.localStorage.setItem(KAKAO_STATE_KEY, state)
+    window.location.assign(`https://kauth.kakao.com/oauth/authorize?${params}`)
   }
 
   const handleSendLetter = async (event: FormEvent<HTMLFormElement>) => {
@@ -447,6 +575,20 @@ function App() {
               : authMode === 'signIn'
                 ? '로그인'
                 : '가입하고 시작'}
+          </button>
+
+          <div className="auth-divider">
+            <span>또는</span>
+          </div>
+
+          <button
+            className="button kakao"
+            type="button"
+            disabled={kakaoLoading || authLoading}
+            onClick={startKakaoLogin}
+          >
+            <span aria-hidden="true">K</span>
+            {kakaoLoading ? '카카오 확인 중' : '카카오로 시작하기'}
           </button>
         </form>
       </main>
